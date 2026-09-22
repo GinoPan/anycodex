@@ -160,16 +160,15 @@ def write_catalog(vendors):
             entry["max_context_window"] = m["context_window"]
             models.append(entry)
             prio += 1
-    # hide official models inside our catalog: the picker shows them from the
-    # server-provided list anyway; hidden entries just supply engine metadata
+    # official models from the server list keep their own visibility: listed
+    # entries show in the picker even when the account is rate-limited (the
+    # server-side list channel fails then), hidden ones stay hidden
     try:
         cache = json.load(open(CACHE_PATH, encoding="utf-8"))
         have = {m["slug"] for m in models}
         for m in cache.get("models", []):
             if m["slug"] not in have:
-                e = dict(m)
-                e["visibility"] = "hide"
-                models.append(e)
+                models.append(dict(m))
     except Exception:
         print("NOTE: models_cache.json not readable, official entries skipped (harmless).")
     json.dump({"models": models}, open(CATALOG_PATH, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
