@@ -22,9 +22,10 @@
           "description": "Z.ai's latest flagship model",
           "context_window": 1048576,
           "input_modalities": ["text"],
-          "default_reasoning_level": "max",
+          "default_reasoning_level": "high",
           "supported_reasoning_levels": [
             { "effort": "low", "description": "Light reasoning" },
+            { "effort": "medium", "description": "Balanced reasoning" },
             { "effort": "high", "description": "Enhanced reasoning" },
             { "effort": "max", "description": "Deep reasoning" }
           ]
@@ -38,6 +39,7 @@
           "default_reasoning_level": "high",
           "supported_reasoning_levels": [
             { "effort": "low", "description": "Light reasoning" },
+            { "effort": "medium", "description": "Balanced reasoning" },
             { "effort": "high", "description": "Enhanced reasoning" },
             { "effort": "max", "description": "Deep reasoning" }
           ]

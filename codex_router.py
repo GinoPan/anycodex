@@ -233,14 +233,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
 # ---------- models_cache injection (keeps custom models in the desktop picker) ----------
 
 def inject_models_cache():
-    """Append configured custom models to the server-provided picker cache."""
+    """Upsert configured custom models into the server-provided picker cache.
+
+    Missing entries are appended (cloned from an official entry); existing
+    custom entries whose supported reasoning levels changed in
+    router_config.json are updated in place, so effort-level fixes propagate
+    without waiting for the server to refresh the cache.
+    """
     try:
         with open(CACHE_PATH, encoding="utf-8") as f:
             data = json.load(f)
         models = data.get("models") or []
+        wanted = [m for v in ACTIVE_VENDORS for m in v["models"]]
+        spec_by_slug = {m["slug"]: m for m in wanted}
+        changed = False
+        for i, m in enumerate(models):
+            spec = spec_by_slug.get(m.get("slug"))
+            if spec is None:
+                continue
+            want = [l["effort"] for l in spec["supported_reasoning_levels"]]
+            have = [l.get("effort") for l in m.get("supported_reasoning_levels", [])]
+            if have != want:
+                models[i]["supported_reasoning_levels"] = spec["supported_reasoning_levels"]
+                models[i]["default_reasoning_level"] = spec["default_reasoning_level"]
+                changed = True
         have = {m.get("slug") for m in models}
-        missing = [m["slug"] for m in wanted if m["slug"] not in have]
-        if not missing:
+        missing = [s for s in spec_by_slug if s not in have]
+        if not missing and not changed:
             return False
         tpl = next((m for m in models if m.get("slug") == "gpt-5.6-terra"), None)
         if tpl is None:  # accounts without this exact model: clone any listed entry
@@ -248,7 +267,6 @@ def inject_models_cache():
         if tpl is None:
             log("models_cache: no template entry found, skip inject")
             return False
-        wanted = [m for v in ACTIVE_VENDORS for m in v["models"]]
         base_prio = max((m.get("priority") or 0) for m in models) + 1
         for i, spec in enumerate(wanted):
             if spec["slug"] in have:
@@ -283,7 +301,7 @@ def inject_models_cache():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         os.replace(tmp, CACHE_PATH)
-        log("models_cache injected: %s" % ", ".join(missing))
+        log("models_cache injected/updated: %s%s" % (", ".join(missing), " (+levels updated)" if changed else ""))
         return True
     except Exception as e:
         log("models_cache inject error: %r" % e)
