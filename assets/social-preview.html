@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: linear-gradient(135deg, #0d1117 0%, #161b27 60%, #1a2233 100%);
+    color: #e6edf3; display: flex; align-items: center; padding: 0 72px;
+    position: relative;
+  }
+  .glow {
+    position: absolute; width: 900px; height: 900px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(56,139,253,0.14) 0%, transparent 65%);
+    top: -300px; right: -200px; pointer-events: none;
+  }
+  .left { flex: 1.15; padding-right: 48px; }
+  .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 34px; }
+  .logo {
+    width: 46px; height: 46px; border-radius: 12px;
+    background: linear-gradient(135deg, #388bfd, #2da44e);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 24px; color: #fff;
+  }
+  .brand span { font-size: 26px; font-weight: 700; letter-spacing: 0.5px; }
+  h1 { font-size: 58px; line-height: 1.28; font-weight: 800; letter-spacing: 1px; }
+  h1 .gpt { color: #58a6ff; }
+  h1 .glm { color: #3fb950; }
+  h1 .ds { color: #a371f7; }
+  .sub { margin-top: 22px; font-size: 27px; color: #9198a1; letter-spacing: 2px; }
+  .badges { margin-top: 40px; display: flex; gap: 12px; }
+  .badge {
+    font-size: 19px; padding: 8px 18px; border-radius: 20px;
+    border: 1px solid #30363d; background: #161b22; color: #adbac7;
+  }
+  .right { flex: 0.85; }
+  .picker {
+    background: #161b22; border: 1px solid #30363d; border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.55); padding: 18px 0; width: 420px;
+  }
+  .picker .head {
+    padding: 6px 24px 14px; font-size: 17px; color: #768390;
+    border-bottom: 1px solid #21262d; margin-bottom: 8px;
+  }
+  .row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 24px; font-size: 21px;
+  }
+  .row .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+  .row .chk { margin-left: auto; color: #3fb950; font-size: 19px; visibility: hidden; }
+  .row.sel { background: #1c2431; }
+  .row.sel .chk { visibility: visible; }
+  .tag {
+    margin-left: auto; font-size: 14px; color: #768390;
+    border: 1px solid #30363d; border-radius: 10px; padding: 2px 10px;
+  }
+  .g { background: #58a6ff; } .z { background: #3fb950; } .d { background: #a371f7; }
+</style>
+</head>
+<body>
+  <div class="glow"></div>
+  <div class="left">
+    <div class="brand"><div class="logo">A</div><span>AnyCodex</span></div>
+    <h1><span class="gpt">官方 GPT</span> + <span class="glm">GLM</span> + <span class="ds">DeepSeek</span><br>同一个模型选择器</h1>
+    <div class="sub">点谁走谁 · 额度不够，模型管够</div>
+    <div class="badges">
+      <div class="badge">ChatGPT 桌面版 Codex</div>
+      <div class="badge">零第三方依赖</div>
+      <div class="badge">MIT</div>
+    </div>
+  </div>
+  <div class="right">
+    <div class="picker">
+      <div class="head">推荐模型集 / 默认</div>
+      <div class="row"><span class="dot g"></span>GPT-6 Astra<span class="tag">官方</span></div>
+      <div class="row"><span class="dot g"></span>GPT-5.6 Terra<span class="tag">官方</span></div>
+      <div class="row sel"><span class="dot z"></span>GLM-5.3<span class="chk">✓</span></div>
+      <div class="row"><span class="dot z"></span>GLM-5.3-Flash</div>
+      <div class="row"><span class="dot d"></span>DeepSeek-Flash<span class="tag">API</span></div>
+      <div class="row"><span class="dot d"></span>DeepSeek-V4-Pro</div>
+    </div>
+  </div>
+</body>
+</html>
