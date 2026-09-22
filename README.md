@@ -6,7 +6,7 @@
 
 - 官方模型照常用（消耗你的 ChatGPT 套餐）
 - GLM / DeepSeek 走你自己的 API Key（消耗 Coding Plan / DeepSeek 额度，便宜得多）
-- 零第三方工具依赖：核心是一个约 250 行、无任何 pip 依赖的 Python 本地路由
+- 零第三方工具依赖：核心是一个数百行、无任何 pip 依赖的 Python 本地路由
 
 > 仅需 Python 3.11+。已在 Windows 实测；macOS/Linux 路由核心为纯 Python，可参考 [手动安装](#其他系统)。
 
@@ -50,6 +50,7 @@ codex_router.py（127.0.0.1:8231，按请求体里的 model 字段分流）
 - ChatGPT 桌面版（已登录，Codex 可正常使用）
 - Python 3.11+（仅需标准库）
 - [GLM Coding Plan](https://bigmodel.cn) 的 API Key 和/或 [DeepSeek](https://platform.deepseek.com) 的 API Key（可任选其一或都要）
+- 如果 cc-switch 等工具正在接管你的 `~/.codex/config.toml`，先用它还原为官方配置再安装（本工具与"切换器"类工具不兼容，因为它需要常驻供应商）
 
 ## 安装
 

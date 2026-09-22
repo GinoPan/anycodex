@@ -1,27 +1,36 @@
 #!/usr/bin/env python3
 """AnyCodex uninstaller.
 
-Removes the router autostart entry, stops the router, strips the AnyCodex
-blocks from ~/.codex/config.toml (restoring the official provider), and
-deletes the installed router/catalog files. Your config backup files are kept.
+Removes the router autostart entry, stops the router, strips every
+anycodex-managed block from ~/.codex/config.toml (restoring the official
+provider), and deletes the installed router/catalog files. Backups created by
+setup.py are kept.
 """
-import json
 import os
 import platform
 import subprocess
 import sys
 
-CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(
-    os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".codex")
+from anycodex_common import CODEX_HOME, drop_top_level_keys, strip_managed_sections
+
 CONFIG_PATH = os.path.join(CODEX_HOME, "config.toml")
 IS_WIN = platform.system() == "Windows"
 
 
 def stop_router():
+    import json
+    port = 8231
+    cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "router_config.json")
+    try:
+        port = json.load(open(cfg_path, encoding="utf-8")).get("port", 8231)
+    except Exception:
+        pass
     if IS_WIN:
-        r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True)
-        pids = {ln.split()[-1] for ln in r.stdout.splitlines()
-                if ":8231" in ln and "LISTENING" in ln}
+        r = subprocess.run(["netstat", "-ano"], capture_output=True)
+        # netstat output uses the OEM codepage (GBK on zh-CN); decode leniently
+        text = r.stdout.decode("utf-8", errors="replace") if r.stdout else ""
+        pids = {ln.split()[-1] for ln in text.splitlines()
+                if ":%d" % port in ln and "LISTENING" in ln}
         for pid in pids:
             subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
             print("stopped router pid", pid)
@@ -42,27 +51,27 @@ def remove_autostart():
 
 
 def clean_config():
-    src = open(CONFIG_PATH, encoding="utf-8").read()
-    lines = src.splitlines(keepends=True)
-    first_table = next((i for i, l in enumerate(lines) if l.lstrip().startswith("[")), len(lines))
-    drop_top = {"model_provider", "model_catalog_json"}
-    out = [l for i, l in enumerate(lines)
-           if not (i < first_table and any(l.strip().startswith(k) for k in drop_top))]
-    text = "".join(l for l in out if not l.lstrip().startswith("[model_providers.ROUTER]"))
-    # drop vendor key blocks (sections written by setup.py are all-caps names)
-    import re
-    text = re.sub(r"\n?\[model_providers\.(ZAI|DEEPSEEK)\]\n(name = \"[^\"]*\"\nbase_url = \"[^\"]*\"\n"
-                  r"experimental_bearer_token = \"[^\"]*\"\nwire_api = \"responses\"\n?)", "\n", text)
-    open(CONFIG_PATH, "w", encoding="utf-8", newline="\n").write(text)
+    import json
+    known = {"model_providers.ROUTER"}
+    try:
+        cfg_repo = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                               "router_config.json"), encoding="utf-8"))
+        known |= {"model_providers.%s" % v["key_config_section"] for v in cfg_repo.get("vendors", [])}
+    except Exception:
+        pass
+    text = open(CONFIG_PATH, encoding="utf-8").read()
+    cleaned = drop_top_level_keys(strip_managed_sections(text, known),
+                                  ("model_provider", "model_catalog_json"))
+    open(CONFIG_PATH, "w", encoding="utf-8", newline="\n").write(cleaned)
     import tomllib
-    cfg = tomllib.load(open(CONFIG_PATH, "rb"))
-    if "ROUTER" in cfg.get("model_providers", {}):
-        print("WARNING: ROUTER block still present, remove manually.")
-    else:
-        print("config.toml restored to official provider.")
-    if cfg.get("model") and str(cfg["model"]).startswith(("glm", "deepseek")):
-        print("NOTE: default model is %r (a third-party slug). Switch the model in the "
-              "app picker or edit config.toml to an official model." % cfg["model"])
+    cfg = tomllib.load(open(CONFIG_PATH, "rb"))  # validate
+    print("config.toml restored (anycodex blocks removed, TOML valid)."
+          if "ROUTER" not in cfg.get("model_providers", {})
+          else "WARNING: ROUTER block still present, remove manually.")
+    model = cfg.get("model")
+    if model and str(model).startswith(("glm", "deepseek")):
+        print("NOTE: default model is %r (a third-party slug). Pick an official model "
+              "in the app, or edit config.toml." % model)
 
 
 def main():

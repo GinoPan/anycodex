@@ -6,11 +6,14 @@ through the local AnyCodex router, so official OpenAI models and third-party
 models (GLM, DeepSeek, ...) can be mixed in the same model picker.
 
 What it does:
-  1. backs up ~/.codex/config.toml
+  1. backs up ~/.codex/config.toml (and models.json if present)
   2. adds a local ROUTER provider + vendor key blocks to config.toml
   3. generates ~/.codex/models.json (model catalog for the picker/engine)
   4. installs the router into ~/.codex and starts it
-  5. registers an autostart entry (Windows; macOS prints manual steps)
+  5. registers an autostart entry (Windows; other systems print manual steps)
+
+Blocks written here carry a marker comment; uninstall.py and repeated runs of
+this script remove previous marked blocks cleanly before writing new ones.
 
 Run:  python setup.py
 """
@@ -19,15 +22,18 @@ import json
 import os
 import platform
 import shutil
+import socket
 import subprocess
 import sys
+import time
+
+from anycodex_common import CODEX_HOME, MARKER
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 ROUTER_CONFIG = json.load(open(os.path.join(REPO_DIR, "router_config.json"), encoding="utf-8"))
+from anycodex_common import drop_top_level_keys, strip_managed_sections  # noqa: E402
 
 IS_WIN = platform.system() == "Windows"
-CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(
-    os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".codex")
 CONFIG_PATH = os.path.join(CODEX_HOME, "config.toml")
 CATALOG_PATH = os.path.join(CODEX_HOME, "models.json")
 CACHE_PATH = os.path.join(CODEX_HOME, "models_cache.json")
@@ -48,10 +54,7 @@ CATALOG_BOILERPLATE = {
     "experimental_supported_tools": [],
 }
 
-TOP_KEYS = {
-    "model_provider": '"ROUTER"',
-    "model_catalog_json": '"~/.codex/models.json"',
-}
+TOP_KEYS = ("model_provider", "model_catalog_json")
 
 
 def die(msg):
@@ -73,7 +76,8 @@ def preflight():
 def choose_vendors():
     print("\nVendors available in router_config.json:")
     for i, v in enumerate(ROUTER_CONFIG["vendors"]):
-        print("  [%d] %s - %s (models: %s)" % (i, v["name"], v.get("label", ""), ", ".join(m["slug"] for m in v["models"])))
+        print("  [%d] %s - %s (models: %s)" % (i, v["name"], v.get("label", ""),
+                                                ", ".join(m["slug"] for m in v["models"])))
     raw = input("Enable which? (comma numbers, Enter = all): ").strip()
     if not raw:
         return ROUTER_CONFIG["vendors"]
@@ -83,6 +87,7 @@ def choose_vendors():
 
 def collect_keys(vendors):
     print("\nAPI keys are stored in %s ([model_providers.<name>] blocks)." % CONFIG_PATH)
+    missing = []
     for v in vendors:
         env = v["key_env"]
         current = os.environ.get(env)
@@ -95,51 +100,51 @@ def collect_keys(vendors):
         if key:
             os.environ[env] = key
         else:
-            print("  skipped %s (no key; its models will fail until a key is set)" % v["name"])
+            missing.append(v["name"])
+            print("  no key for %s - it will be skipped (its models stay unrouted)" % v["name"])
+    return [v for v in vendors if v["name"] not in missing]
 
 
-def backup_config():
-    import time
-    bak = CONFIG_PATH + ".bak-anycodex-" + time.strftime("%Y%m%d-%H%M%S")
-    shutil.copy2(CONFIG_PATH, bak)
-    print("config.toml backed up ->", bak)
-    return bak
+def backup(path, tag):
+    if os.path.exists(path):
+        bak = "%s.bak-anycodex-%s" % (path, tag)
+        shutil.copy2(path, bak)
+        print("backed up %s -> %s" % (os.path.basename(path), os.path.basename(bak)))
 
 
 def update_config_toml(vendors):
     src = open(CONFIG_PATH, encoding="utf-8").read()
-    lines = src.splitlines(keepends=True)
-    first_table = next((i for i, l in enumerate(lines) if l.lstrip().startswith("[")), len(lines))
+    known = {"model_providers.ROUTER"} | {"model_providers.%s" % v["key_config_section"]
+                                          for v in ROUTER_CONFIG["vendors"]}
+    text = strip_managed_sections(src, known)        # remove previous anycodex/vendor blocks
+    text = drop_top_level_keys(text, TOP_KEYS)       # and previous top-level keys
 
-    # top-level keys: drop old occurrences, insert fresh ones right before the first table
-    top = [l for i, l in enumerate(lines[:first_table])
-           if not any(l.strip().startswith(k + " ") or l.strip().startswith(k + "=") for k in TOP_KEYS)]
-    top += ["%s = %s\n" % (k, v) for k, v in TOP_KEYS.items()]
-
-    body = lines[first_table:]
-    # strip previous AnyCodex blocks (idempotent reinstall)
-    body = [l for l in body if not l.lstrip().startswith("[model_providers.ROUTER]")]
-    text = "".join(top + body).rstrip("\n") + "\n"
+    lines = text.splitlines(keepends=True)
+    first_table = next((i for i, l in enumerate(lines) if l.strip().startswith("[")), len(lines))
+    insert = "".join('%s = "%s"\n' % (k, v) for k, v in
+                     (("model_provider", "ROUTER"), ("model_catalog_json", "~/.codex/models.json")))
+    text = "".join(lines[:first_table]).rstrip("\n") + "\n" + insert + "".join(lines[first_table:])
 
     text += (
-        "\n[model_providers.ROUTER]\n"
+        "\n[model_providers.ROUTER]\n%s\n"
         'name = "AnyCodex Local Router"\n'
         'base_url = "http://127.0.0.1:%d"\n'
         'wire_api = "responses"\n'
-        "requires_openai_auth = true\n" % ROUTER_CONFIG["port"]
+        "requires_openai_auth = true\n" % (MARKER, ROUTER_CONFIG["port"])
     )
     for v in vendors:
         key = os.environ.get(v["key_env"], "")
         text += (
-            "\n[model_providers.%s]\n"
+            "\n[model_providers.%s]\n%s\n"
             'name = "%s"\n'
             'base_url = "https://%s"\n'
             'experimental_bearer_token = "%s"\n'
-            'wire_api = "responses"\n' % (v["key_config_section"], v["name"], v["host"], key)
+            'wire_api = "responses"\n' % (v["key_config_section"], MARKER, v["name"], v["host"], key)
         )
     open(CONFIG_PATH, "w", encoding="utf-8", newline="\n").write(text)
     import tomllib
-    tomllib.load(open(CONFIG_PATH, "rb"))  # validate
+    cfg = tomllib.load(open(CONFIG_PATH, "rb"))  # validate before we call it done
+    assert cfg.get("model_provider") == "ROUTER"
     print("config.toml updated and validated (model_provider=ROUTER, %d vendor key blocks)" % len(vendors))
 
 
@@ -155,7 +160,7 @@ def write_catalog(vendors):
             entry["max_context_window"] = m["context_window"]
             models.append(entry)
             prio += 1
-    # hide official models from our catalog: the picker shows them from the
+    # hide official models inside our catalog: the picker shows them from the
     # server-provided list anyway; hidden entries just supply engine metadata
     try:
         cache = json.load(open(CACHE_PATH, encoding="utf-8"))
@@ -178,18 +183,27 @@ def install_router_files():
 
 
 def start_router():
+    port = ROUTER_CONFIG["port"]
+    s = socket.socket()
+    s.settimeout(2)
+    busy = s.connect_ex(("127.0.0.1", port)) == 0
+    s.close()
+    if busy:
+        print("NOTE: port %d already in use - the router was NOT started here." % port)
+        print("      If an older anycodex/router instance is running, stop it (uninstall.py or")
+        print("      taskkill) and rerun setup; if it IS this router, nothing to do.")
+        return
     py = os.path.join(os.path.dirname(sys.executable), "pythonw.exe") if IS_WIN else sys.executable
     if not os.path.exists(py):
         py = sys.executable
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen([py, os.path.join(CODEX_HOME, "codex_router.py")], creationflags=flags)
-    import socket
     time.sleep(2)
     s = socket.socket()
     s.settimeout(3)
-    ok = s.connect_ex(("127.0.0.1", ROUTER_CONFIG["port"])) == 0
+    ok = s.connect_ex(("127.0.0.1", port)) == 0
     s.close()
-    print("router started, port %d listening: %s" % (ROUTER_CONFIG["port"], ok))
+    print("router started, port %d listening: %s" % (port, ok))
 
 
 def register_autostart():
@@ -207,14 +221,16 @@ def register_autostart():
               "  %s %s\n" % (py, router))
 
 
-import time  # noqa: E402  (used by backup_config)
-
 def main():
     print("=== AnyCodex setup ===")
     preflight()
     vendors = choose_vendors()
-    collect_keys(vendors)
-    backup_config()
+    vendors = collect_keys(vendors)
+    if not vendors:
+        die("no vendor with a key selected - nothing to do.")
+    tag = time.strftime("%Y%m%d-%H%M%S")
+    backup(CONFIG_PATH, tag)
+    backup(CATALOG_PATH, tag)
     update_config_toml(vendors)
     write_catalog(vendors)
     install_router_files()

@@ -80,6 +80,15 @@ def load_key(section, env_name):
 
 
 KEYS = {}
+ACTIVE_VENDORS = []
+
+
+def vendor_for(model):
+    for v in ACTIVE_VENDORS:
+        for prefix in v["match_prefixes"]:
+            if model.startswith(prefix):
+                return v
+    return None
 
 
 def system_http_proxy():
@@ -124,14 +133,6 @@ def tls_connection(host, use_system_proxy):
         conn.sock = sock
         return conn
     return http.client.HTTPSConnection(host, timeout=600)
-
-
-def vendor_for(model):
-    for v in VENDORS:
-        for prefix in v["match_prefixes"]:
-            if model.startswith(prefix):
-                return v
-    return None
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -238,14 +239,16 @@ def inject_models_cache():
             data = json.load(f)
         models = data.get("models") or []
         have = {m.get("slug") for m in models}
-        wanted = [m for v in VENDORS for m in v["models"]]
         missing = [m["slug"] for m in wanted if m["slug"] not in have]
         if not missing:
             return False
         tpl = next((m for m in models if m.get("slug") == "gpt-5.6-terra"), None)
+        if tpl is None:  # accounts without this exact model: clone any listed entry
+            tpl = next((m for m in models if m.get("visibility") == "list"), None)
         if tpl is None:
             log("models_cache: no template entry found, skip inject")
             return False
+        wanted = [m for v in ACTIVE_VENDORS for m in v["models"]]
         base_prio = max((m.get("priority") or 0) for m in models) + 1
         for i, spec in enumerate(wanted):
             if spec["slug"] in have:
@@ -303,15 +306,23 @@ def cache_watcher():
 
 
 def main():
+    global ACTIVE_VENDORS
     if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 5 * 1024 * 1024:
         os.replace(LOG_PATH, LOG_PATH + ".old")
     for v in VENDORS:
-        KEYS[v["name"]] = load_key(v["key_config_section"], v["key_env"])
+        try:
+            KEYS[v["name"]] = load_key(v["key_config_section"], v["key_env"])
+            ACTIVE_VENDORS.append(v)
+        except RuntimeError as e:
+            log("vendor %s disabled (no API key): %s" % (v["name"], e))
+    if not ACTIVE_VENDORS:
+        print("no vendor has an API key - nothing to route, exiting.")
+        sys.exit(1)
     threading.Thread(target=cache_watcher, daemon=True).start()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True
     log("anycodex router started on 127.0.0.1:%d (vendors=%s, system proxy=%s)"
-        % (PORT, ",".join(v["name"] for v in VENDORS), system_http_proxy()))
+        % (PORT, ",".join(v["name"] for v in ACTIVE_VENDORS), system_http_proxy()))
     server.serve_forever()
 
 
