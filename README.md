@@ -1,5 +1,12 @@
 # AnyCodex
 
+![License](https://img.shields.io/badge/license-MIT-green)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![Platform](https://img.shields.io/badge/platform-Windows%20tested-informational)
+![Deps](https://img.shields.io/badge/dependencies-zero-success)
+
+> **English TL;DR** — Mix official OpenAI models with your own GLM / DeepSeek API keys *inside the same model picker* of the ChatGPT desktop app (Codex). A ~300-line stdlib-only local router passes official traffic through with your ChatGPT login untouched, and routes `glm*` / `deepseek*` models to their vendors. No environment switching, no third-party tools, fully reversible. [中文介绍见下 ↓](#效果)
+
 **在 ChatGPT 桌面版的 Codex 里，官方模型与 GLM / DeepSeek 同一个选择器混选、点谁走谁。**
 
 如果你的 ChatGPT 套餐额度不够用，又订阅了 [GLM Coding Plan](https://bigmodel.cn) 或有 DeepSeek API Key，这个项目让你在**不放弃官方模型和账号能力**的前提下，把它们直接加进 Codex 右下角的模型选择器。
@@ -14,7 +21,9 @@
 
 ## 效果
 
-右下角选择器里，官方模型与自定义模型并列：
+右下角选择器里，官方模型与自定义模型并列（截图占位，发布前替换为真图 `assets/picker.png`）：
+
+![model picker with mixed models](assets/picker.png)
 
 ```
 GPT-6-Astra / GPT-5.6-Sol / GPT-5.6-Terra ...   ← 官方，走你的 ChatGPT 套餐
