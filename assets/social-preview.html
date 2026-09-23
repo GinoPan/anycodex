@@ -30,10 +30,11 @@
   h1 .glm { color: #3fb950; }
   h1 .ds { color: #a371f7; }
   .sub { margin-top: 22px; font-size: 27px; color: #9198a1; letter-spacing: 2px; }
-  .badges { margin-top: 40px; display: flex; gap: 12px; }
+  .badges { margin-top: 40px; display: flex; flex-wrap: wrap; gap: 10px; }
   .badge {
-    font-size: 19px; padding: 8px 18px; border-radius: 20px;
+    font-size: 17px; padding: 8px 16px; border-radius: 20px;
     border: 1px solid #30363d; background: #161b22; color: #adbac7;
+    white-space: nowrap;
   }
   .right { flex: 0.85; }
   .picker {
@@ -63,10 +64,11 @@
   <div class="glow"></div>
   <div class="left">
     <div class="brand"><div class="logo">A</div><span>AnyCodex</span></div>
-    <h1><span class="gpt">官方 GPT</span> + <span class="glm">GLM</span> + <span class="ds">DeepSeek</span><br>同一个模型选择器</h1>
+    <h1><span class="gpt">官方 GPT</span> + <span class="glm">任意第三方模型</span><br>同一个模型选择器</h1>
     <div class="sub">点谁走谁 · 额度不够，模型管够</div>
     <div class="badges">
       <div class="badge">ChatGPT 桌面版 Codex</div>
+      <div class="badge">任意厂商可扩展</div>
       <div class="badge">零第三方依赖</div>
       <div class="badge">MIT</div>
     </div>
@@ -80,6 +82,7 @@
       <div class="row"><span class="dot z"></span>GLM-5.3-Flash</div>
       <div class="row"><span class="dot d"></span>DeepSeek-Flash<span class="tag">API</span></div>
       <div class="row"><span class="dot d"></span>DeepSeek-V4-Pro</div>
+      <div class="row"><span class="dot" style="background:#768390"></span>更多厂商，照配即得<span class="tag">可扩展</span></div>
     </div>
   </div>
 </body>

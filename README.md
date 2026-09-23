@@ -5,15 +5,16 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20tested-informational)
 ![Deps](https://img.shields.io/badge/dependencies-zero-success)
 
-> **English TL;DR** — Mix official OpenAI models with your own GLM / DeepSeek API keys *inside the same model picker* of the ChatGPT desktop app (Codex). A ~300-line stdlib-only local router passes official traffic through with your ChatGPT login untouched, and routes `glm*` / `deepseek*` models to their vendors. No environment switching, no third-party tools, fully reversible. [中文介绍见下 ↓](#效果)
+> **English TL;DR** — Mix official OpenAI models with third-party models from your own API keys *inside the same model picker* of the ChatGPT desktop app (Codex). GLM and DeepSeek come preset; any vendor that speaks the OpenAI **Responses** protocol plugs in with one config block. A ~300-line stdlib-only local router passes official traffic through with your ChatGPT login untouched. No environment switching, no third-party tools, fully reversible. [中文介绍见下 ↓](#效果)
 
-**在 ChatGPT 桌面版的 Codex 里，官方模型与 GLM / DeepSeek 同一个选择器混选、点谁走谁。**
+**在 ChatGPT 桌面版的 Codex 里，官方模型与任意第三方模型（GLM、DeepSeek、Kimi……）同一个选择器混选、点谁走谁。**
 
-如果你的 ChatGPT 套餐额度不够用，又订阅了 [GLM Coding Plan](https://bigmodel.cn) 或有 DeepSeek API Key，这个项目让你在**不放弃官方模型和账号能力**的前提下，把它们直接加进 Codex 右下角的模型选择器。
+如果你的 ChatGPT 套餐额度不够用，手里又有任意厂商的 API Key——[GLM Coding Plan](https://bigmodel.cn)、[DeepSeek](https://platform.deepseek.com)，或任何支持 OpenAI Responses 协议的服务——这个项目让你在**不放弃官方模型和账号能力**的前提下，把它们直接加进 Codex 右下角的模型选择器。
 
 - 官方模型照常用（消耗你的 ChatGPT 套餐）
-- GLM / DeepSeek 走你自己的 API Key（消耗 Coding Plan / DeepSeek 额度，便宜得多）
+- 第三方模型走你自己的 API Key（比 ChatGPT 套餐便宜得多）
 - 零第三方工具依赖：核心是一个数百行、无任何 pip 依赖的 Python 本地路由
+- 不绑定厂商：GLM / DeepSeek 只是预置模板，加新厂商 = 照抄一个配置块
 
 > 仅需 Python 3.11+。已在 Windows 实测；macOS/Linux 路由核心为纯 Python，可参考 [手动安装](#其他系统)。
 
@@ -27,11 +28,12 @@
 
 ```
 GPT-6-Astra / GPT-5.6-Sol / GPT-5.6-Terra ...   ← 官方，走你的 ChatGPT 套餐
-GLM-5.3 / GLM-5.3-Flash                          ← 智谱 Coding Plan
-DeepSeek-Flash / DeepSeek-V4-Pro                 ← DeepSeek API
+GLM-5.3 / GLM-5.3-Flash                          ← 智谱 Coding Plan（预置）
+DeepSeek-Flash / DeepSeek-V4-Pro                 ← DeepSeek API（预置）
+…任意厂商，照抄配置块即加                          ← 你的 Key，你的模型
 ```
 
-选谁就走谁：GLM 系列请求转发到智谱、DeepSeek 系列转发到 DeepSeek（两者均原生支持 OpenAI Responses 协议），其余原样透传到 OpenAI 官方后端并携带你自己的 ChatGPT 登录态。
+选谁就走谁：按模型名前缀分流——`glm*` 转发智谱、`deepseek*` 转发 DeepSeek（均为预置），其他厂商在 [添加任意厂商](#添加任意厂商) 补一个配置块即可。唯一要求：厂商原生支持 OpenAI **Responses** 协议。其余请求原样透传到 OpenAI 官方后端并携带你自己的 ChatGPT 登录态。
 
 ## 原理
 
@@ -44,9 +46,10 @@ ChatGPT 桌面版（官方登录态，不做任何修改）
 config.toml：全局供应商指向本机路由（requires_openai_auth = true）
       ▼
 codex_router.py（127.0.0.1:8231，按请求体里的 model 字段分流）
-      ├─ glm*      → open.bigmodel.cn/api/v1     （智谱 Key）
-      ├─ deepseek* → api.deepseek.com            （DeepSeek Key）
-      └─ 其他       → chatgpt.com/backend-api/codex（透传你的 ChatGPT JWT，经系统代理）
+      ├─ glm*      → open.bigmodel.cn/api/v1     （智谱 Key，预置）
+      ├─ deepseek* → api.deepseek.com            （DeepSeek Key，预置）
+      ├─ 其他前缀   → 你在配置里声明的任意厂商
+      └─ 未匹配     → chatgpt.com/backend-api/codex（透传你的 ChatGPT JWT，经系统代理）
 ```
 
 1. **登录态透传**：`requires_openai_auth = true` 让引擎把你的 ChatGPT 凭证发给本机路由，官方请求原样转发——官方模型行为与原生完全一致（实测抓包验证）。
@@ -58,7 +61,7 @@ codex_router.py（127.0.0.1:8231，按请求体里的 model 字段分流）
 
 - ChatGPT 桌面版（已登录，Codex 可正常使用）
 - Python 3.11+（仅需标准库）
-- [GLM Coding Plan](https://bigmodel.cn) 的 API Key 和/或 [DeepSeek](https://platform.deepseek.com) 的 API Key（可任选其一或都要）
+- 任意厂商的 API Key：预置 [GLM Coding Plan](https://bigmodel.cn) 与 [DeepSeek](https://platform.deepseek.com)（可任选其一或都要）；其他厂商见 [添加任意厂商](#添加任意厂商)
 - 如果 cc-switch 等工具正在接管你的 `~/.codex/config.toml`，先用它还原为官方配置再安装（本工具与"切换器"类工具不兼容，因为它需要常驻供应商）
 
 ## 安装
@@ -80,11 +83,11 @@ python setup.py
 - 官方模型报 429 是你的 ChatGPT 套餐额度用完，与本工具无关。
 - 修改 `router_config.json`（换 Key、加模型）后重启路由进程即可；改了模型目录相关内容需重启应用。
 
-## 添加其他厂商
+## 添加任意厂商
 
-编辑 `router_config.json`（或 `~/.codex/router_config.json`），照抄一个 vendor 块改四个字段：`match_prefixes`（模型名前缀）、`host`、`path_prefix`（Responses 端点路径）、Key；`models` 里按模板补模型元数据。重启路由生效。
+AnyCodex 不绑定厂商，GLM / DeepSeek 只是预置模板。加新厂商：编辑 `router_config.json`（或 `~/.codex/router_config.json`），照抄一个 vendor 块改四个字段：`match_prefixes`（模型名前缀）、`host`、`path_prefix`（Responses 端点路径）、Key；`models` 里按模板补模型元数据。重启路由生效。
 
-> 厂商必须原生支持 OpenAI **Responses** 协议才能直连。只有 chat completions 接口的厂商需要在路由里加一层协议翻译（欢迎 PR）。
+> 唯一硬性要求：厂商必须原生支持 OpenAI **Responses** 协议才能直连。只有 chat completions 接口的厂商需要在路由里加一层协议翻译（欢迎 PR）。
 
 ## 排障
 
