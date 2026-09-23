@@ -22,7 +22,7 @@
 
 ## 效果
 
-右下角选择器里，官方模型与自定义模型并列（截图占位，发布前替换为真图 `assets/picker.png`）：
+右下角选择器里，官方模型与第三方模型并列（顶部横幅为官方额度耗尽提示，此时第三方模型照常可用）：
 
 ![model picker with mixed models](assets/picker.png)
 
@@ -67,7 +67,7 @@ codex_router.py（127.0.0.1:8231，按请求体里的 model 字段分流）
 ## 安装
 
 ```bash
-git clone https://github.com/<you>/anycodex.git
+git clone https://github.com/GinoPan/anycodex.git
 cd anycodex
 python setup.py
 ```
