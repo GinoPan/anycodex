@@ -261,10 +261,9 @@ def inject_models_cache():
         missing = [s for s in spec_by_slug if s not in have]
         if not missing and not changed:
             return False
-        tpl = next((m for m in models if m.get("slug") == "gpt-5.6-terra"), None)
-        if tpl is None:  # accounts without this exact model: clone any listed entry
-            tpl = next((m for m in models if m.get("visibility") == "list"), None)
-        if tpl is None:
+        tpl = next((m for m in models
+                    if m.get("visibility") == "list" and m.get("slug") not in spec_by_slug), None)
+        if tpl is None:  # no listed official entry to clone from
             log("models_cache: no template entry found, skip inject")
             return False
         base_prio = max((m.get("priority") or 0) for m in models) + 1

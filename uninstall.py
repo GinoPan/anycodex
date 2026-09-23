@@ -53,10 +53,12 @@ def remove_autostart():
 def clean_config():
     import json
     known = {"model_providers.ROUTER"}
+    prefixes = ()
     try:
         cfg_repo = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                "router_config.json"), encoding="utf-8"))
         known |= {"model_providers.%s" % v["key_config_section"] for v in cfg_repo.get("vendors", [])}
+        prefixes = tuple(p for v in cfg_repo.get("vendors", []) for p in v.get("match_prefixes", []))
     except Exception:
         pass
     text = open(CONFIG_PATH, encoding="utf-8").read()
@@ -69,7 +71,7 @@ def clean_config():
           if "ROUTER" not in cfg.get("model_providers", {})
           else "WARNING: ROUTER block still present, remove manually.")
     model = cfg.get("model")
-    if model and str(model).startswith(("glm", "deepseek")):
+    if model and prefixes and str(model).startswith(prefixes):
         print("NOTE: default model is %r (a third-party slug). Pick an official model "
               "in the app, or edit config.toml." % model)
 

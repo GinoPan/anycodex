@@ -3,7 +3,8 @@
 
 Configures the ChatGPT desktop app (Codex engine) to route model requests
 through the local AnyCodex router, so official OpenAI models and third-party
-models (GLM, DeepSeek, ...) can be mixed in the same model picker.
+models from any vendor that speaks the OpenAI Responses protocol (GLM and
+DeepSeek are preset) can be mixed in the same model picker.
 
 What it does:
   1. backs up ~/.codex/config.toml (and models.json if present)
