@@ -43,7 +43,7 @@ Codex 引擎是"全局单一供应商"设计，模型目录里没有供应商字
 ChatGPT 桌面版（官方登录态，不做任何修改）
       │ 所有模型请求
       ▼
-config.toml：全局供应商指向本机路由（requires_openai_auth = true）
+config.toml：全局供应商指向本机路由（bearer-token 形态）
       ▼
 codex_router.py（127.0.0.1:8231，按请求体里的 model 字段分流）
       ├─ glm*      → open.bigmodel.cn/api/v1     （智谱 Key，预置）
@@ -52,7 +52,7 @@ codex_router.py（127.0.0.1:8231，按请求体里的 model 字段分流）
       └─ 未匹配     → chatgpt.com/backend-api/codex（透传你的 ChatGPT JWT，经系统代理）
 ```
 
-1. **登录态透传**：`requires_openai_auth = true` 让引擎把你的 ChatGPT 凭证发给本机路由，官方请求原样转发——官方模型行为与原生完全一致（实测抓包验证）。
+1. **凭证注入（免切换的关键）**：供应商声明为普通 bearer-token 形态（`experimental_bearer_token`），官方请求的 ChatGPT 凭证由路由器从 `~/.codex/auth.json` 读取并注入（`Authorization` + `chatgpt-account-id`，每次请求重读，跟随应用刷新）。官方模型行为与原生一致（实测 429/200 响应与官方直连完全相同）。这一设计同时让新版桌面应用在官方额度耗尽时**不再锁定输入框**（见已知问题）。
 2. **按请求分流**：供应商成为模型名的纯函数，从机制上杜绝"界面选 A、请求发给 B"。
 3. **模型目录**（`models.json`）：向引擎声明第三方模型的元数据（上下文窗口、推理档位等），字段经引擎严格校验。
 4. **选择器缓存注入**：桌面端选择器的底表来自服务器下发的账号模型清单（`models_cache.json`），路由器内置监视线程在应用每次刷新该缓存后，自动把自定义模型追加进去——这是第三方模型出现在选择器里的关键。
@@ -102,9 +102,9 @@ python profile.py official   # 还原纯官方配置
 
 ### 已知问题：官方额度耗尽时，新版桌面应用会锁定输入框（含第三方模型）
 
-2026-09-24 起的 ChatGPT 桌面版在账号官方额度（周配额）耗尽时，会在界面层静默禁用整个输入框——**包括走你自己 Key 的第三方模型**：点发送无反应、无报错，引擎与网络链路完全正常（请求根本没发出）。实测确认这是应用侧行为，与本项目无关：纯官方配置同样被锁；`codex` CLI 不受影响；**直连模式（`glm` / `deepseek` profile）不受影响**——该锁定只在 ChatGPT 登录态供应商下启用。
+2026-09-24 起的 ChatGPT 桌面版在账号官方额度（周配额）耗尽时，会在界面层静默禁用整个输入框——但**仅当活跃供应商为 ChatGPT 登录态**（`requires_openai_auth`）时才启用该锁定。AnyCodex 自本版本起将 ROUTER 供应商声明为普通 bearer-token 形态、凭证改由路由器注入，**混选模式天然不受该锁定影响**：官方额度耗尽时选择器照常混选、点谁走谁（官方模型会正常提示额度不足，第三方模型照常工作）。
 
-官方额度重置后（额度活着时）mixed 模式一切正常。被锁期间的临时方案按优先级：切直连 profile > 用 CLI（`codex exec -m glm-5.3 "..."`）> 等额度重置。
+旧版安装（`requires_openai_auth = true` 的 ROUTER 块）如遇输入框锁定：重跑 `python setup.py`，或手动把该行改为 `experimental_bearer_token = "anycodex-local"` 后重启应用。`codex` CLI 与直连 profile（`glm` / `deepseek`）亦不受影响。
 
 ## 排障
 
@@ -117,7 +117,7 @@ python profile.py official   # 还原纯官方配置
 | 第三方模型报 "not supported ... ChatGPT account" | 你在路由配置之前创建的旧对话里用了第三方模型——新开对话或用新开窗口流程 |
 | 所有模型都失败 | 路由没在运行：运行 `python setup.py` 的第 4 步或手动 `pythonw ~/.codex/codex_router.py` |
 | 官方模型 429 | ChatGPT 套餐额度，等重置 |
-| 官方额度耗尽后，mixed 模式下选任何模型点发送都无反应、无报错 | 新版应用的输入框锁定（见「配置模式与切换」）：切 `python profile.py glm` 直连模式，或等额度重置 |
+| 官方额度耗尽后，选任何模型点发送都无反应、无报错 | 旧版安装的登录态供应商触发了新版应用的输入框锁定（见「配置模式与切换」）：重跑 `python setup.py` 升级为凭证注入模式，或临时切 `python profile.py glm` |
 | 改了配置不生效 | 引擎不热加载：重启 ChatGPT 桌面版 |
 
 ## 卸载

@@ -47,6 +47,7 @@ CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(
     os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".codex")
 LOG_PATH = os.path.join(CODEX_HOME, "router.log")
 CACHE_PATH = os.path.join(CODEX_HOME, "models_cache.json")
+AUTH_PATH = os.path.join(CODEX_HOME, "auth.json")
 
 _log_lock = threading.Lock()
 
@@ -89,6 +90,25 @@ def vendor_for(model):
             if model.startswith(prefix):
                 return v
     return None
+
+
+def chatgpt_auth():
+    """(access_token, account_id) from auth.json, re-read per call.
+
+    Used to authenticate official-backend requests when the engine talks to
+    the router without ChatGPT credentials (the provider is declared with a
+    plain bearer token so the desktop app's account rate-limit lockout never
+    engages - see README). The app refreshes auth.json on its own schedule;
+    re-reading per request picks that up automatically.
+    """
+    try:
+        with open(AUTH_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        tok = d["tokens"]["access_token"]
+        return (tok, d["tokens"].get("account_id")) if tok else (None, None)
+    except Exception as e:
+        log("auth.json read failed: %r" % e)
+        return None, None
 
 
 def system_http_proxy():
@@ -182,9 +202,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 conn = tls_connection(host, OFFICIAL.get("use_system_proxy", False))
                 headers = {k: v for k, v in self.headers.items()
                            if k.lower() not in ("host", "content-length", "connection",
-                                                "transfer-encoding", "accept-encoding")}
+                                                "transfer-encoding", "accept-encoding",
+                                                "authorization", "chatgpt-account-id")}
                 headers["Host"] = host
                 headers["Accept-Encoding"] = "identity"
+                tok, acc = chatgpt_auth()
+                if tok:
+                    headers["Authorization"] = "Bearer %s" % tok
+                    if acc:
+                        headers["chatgpt-account-id"] = acc
             conn.request(self.command, upstream_path, body=body if body else None, headers=headers)
             resp = conn.getresponse()
         except Exception as e:
