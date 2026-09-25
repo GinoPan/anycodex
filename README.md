@@ -89,6 +89,23 @@ AnyCodex 不绑定厂商，GLM / DeepSeek 只是预置模板。加新厂商：�
 
 > 唯一硬性要求：厂商必须原生支持 OpenAI **Responses** 协议才能直连。只有 chat completions 接口的厂商需要在路由里加一层协议翻译（欢迎 PR）。
 
+## 配置模式与切换
+
+一条命令在两种形态间切换（改完**完全重启** ChatGPT 桌面版生效）：
+
+```bash
+python profile.py mixed      # 默认。官方+第三方混选（本地路由），官方额度可用时的完整体验
+python profile.py glm        # 直连 GLM：官方额度耗尽时也能正常使用（见下方已知问题）
+python profile.py deepseek   # 直连 DeepSeek：同上
+python profile.py official   # 还原纯官方配置
+```
+
+### 已知问题：官方额度耗尽时，新版桌面应用会锁定输入框（含第三方模型）
+
+2026-09-24 起的 ChatGPT 桌面版在账号官方额度（周配额）耗尽时，会在界面层静默禁用整个输入框——**包括走你自己 Key 的第三方模型**：点发送无反应、无报错，引擎与网络链路完全正常（请求根本没发出）。实测确认这是应用侧行为，与本项目无关：纯官方配置同样被锁；`codex` CLI 不受影响；**直连模式（`glm` / `deepseek` profile）不受影响**——该锁定只在 ChatGPT 登录态供应商下启用。
+
+官方额度重置后（额度活着时）mixed 模式一切正常。被锁期间的临时方案按优先级：切直连 profile > 用 CLI（`codex exec -m glm-5.3 "..."`）> 等额度重置。
+
 ## 排障
 
 一切看日志：`~/.codex/router.log`（每个请求的模型、路由、状态码）。
@@ -100,6 +117,7 @@ AnyCodex 不绑定厂商，GLM / DeepSeek 只是预置模板。加新厂商：�
 | 第三方模型报 "not supported ... ChatGPT account" | 你在路由配置之前创建的旧对话里用了第三方模型——新开对话或用新开窗口流程 |
 | 所有模型都失败 | 路由没在运行：运行 `python setup.py` 的第 4 步或手动 `pythonw ~/.codex/codex_router.py` |
 | 官方模型 429 | ChatGPT 套餐额度，等重置 |
+| 官方额度耗尽后，mixed 模式下选任何模型点发送都无反应、无报错 | 新版应用的输入框锁定（见「配置模式与切换」）：切 `python profile.py glm` 直连模式，或等额度重置 |
 | 改了配置不生效 | 引擎不热加载：重启 ChatGPT 桌面版 |
 
 ## 卸载
