@@ -92,6 +92,102 @@ def vendor_for(model):
     return None
 
 
+def sanitize_official_input(body):
+    """Normalize input items so the official backend accepts vendor-mixed threads.
+
+    Probed 2026-09-27 against chatgpt.com/backend-api/codex/responses (gpt-5.6-sol,
+    store=false). The backend validates every input item against codex schemas:
+
+      - `reasoning` items must not carry raw thinking in `content` (400 "array
+        too long ... maximum length 0"); ids must begin with 'rs'; an id the
+        backend did not issue is a 404 item-not-found unless accompanied by its
+        own Fernet `encrypted_content` (which always starts with "gAAAA").
+      - `message` ids must begin with 'msg' (GLM/DeepSeek issue UUIDs or their
+        own msg_resp_* ids).
+      - vendor ids/passthrough fields appear on every item type.
+
+    GLM/DeepSeek turns produce exactly the rejected shapes. So, for the
+    official route only, rebuild each known item type from its semantic fields
+    (dropping ids, vendor encrypted_content and passthrough metadata; call_id
+    is kept everywhere - the client mints it, so the backend accepts any
+    value). Vendor reasoning is converted to plain summary_text entries, which
+    the backend accepts and the model reads. Official-issued reasoning items
+    (Fernet encrypted_content + rs id) pass through untouched. Unknown item
+    types also pass through untouched.
+
+    Returns (new_body_or_None, items_rewritten).
+    """
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except Exception:
+        return None, 0
+    items = data.get("input")
+    if not isinstance(items, list):
+        return None, 0
+
+    def reasoning_texts(item):
+        texts = [t.get("text") for t in (item.get("summary") or [])
+                 if isinstance(t, dict) and t.get("type") == "summary_text" and t.get("text")]
+        if not texts:
+            for t in item.get("content") or []:
+                if isinstance(t, str) and t:
+                    texts.append(t)
+                elif isinstance(t, dict) and t.get("text"):
+                    texts.append(t["text"])
+        return [t for t in texts if t]
+
+    def content_blocks(item):
+        blocks = []
+        for c in item.get("content") or []:
+            if isinstance(c, dict) and c.get("type") and c.get("text") is not None:
+                blocks.append({"type": c["type"], "text": c["text"]})
+            else:
+                blocks.append(c)
+        return blocks
+
+    rewritten = 0
+    kept = []
+    for item in items:
+        if not isinstance(item, dict):
+            kept.append(item)
+            continue
+        t = item.get("type")
+        if t == "reasoning":
+            enc = item.get("encrypted_content")
+            if (isinstance(enc, str) and enc.startswith("gAAAA")
+                    and str(item.get("id") or "").startswith("rs")):
+                kept.append(item)  # official-issued; backend resolves it
+                continue
+            texts = reasoning_texts(item)
+            if texts:
+                kept.append({"type": "reasoning",
+                             "summary": [{"type": "summary_text", "text": x} for x in texts]})
+            rewritten += 1
+        elif t == "message":
+            kept.append({"type": "message", "role": item.get("role"),
+                         "content": content_blocks(item)})
+            rewritten += 1
+        elif t == "function_call":
+            kept.append({"type": "function_call", "name": item.get("name"),
+                         "call_id": item.get("call_id"), "arguments": item.get("arguments")})
+            rewritten += 1
+        elif t in ("function_call_output", "custom_tool_call_output"):
+            kept.append({"type": t, "call_id": item.get("call_id"),
+                         "output": item.get("output")})
+            rewritten += 1
+        elif t == "custom_tool_call":
+            kept.append({"type": "custom_tool_call", "name": item.get("name"),
+                         "call_id": item.get("call_id"), "input": item.get("input"),
+                         "status": item.get("status")})
+            rewritten += 1
+        else:
+            kept.append(item)
+    if not rewritten:
+        return None, 0
+    data["input"] = kept
+    return json.dumps(data, ensure_ascii=False).encode("utf-8"), rewritten
+
+
 def chatgpt_auth():
     """(access_token, account_id) from auth.json, re-read per call.
 
@@ -211,6 +307,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     headers["Authorization"] = "Bearer %s" % tok
                     if acc:
                         headers["chatgpt-account-id"] = acc
+                if body:
+                    new_body, rewritten = sanitize_official_input(body)
+                    if new_body is not None:
+                        log("official route: rewrote %d input item(s) "
+                            "(vendor CoT/ids normalized)" % rewritten)
+                        body = new_body
             conn.request(self.command, upstream_path, body=body if body else None, headers=headers)
             resp = conn.getresponse()
         except Exception as e:
@@ -234,12 +336,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         total = 0
+        err_snippet = ""
         try:
             while True:
                 chunk = resp.read(8192)
                 if not chunk:
                     break
                 total += len(chunk)
+                if resp.status >= 400 and not err_snippet:
+                    err_snippet = chunk[:400].decode("utf-8", "replace").replace("\n", " ")
                 self.wfile.write(chunk)
                 self.wfile.flush()
         except Exception as e:
@@ -249,8 +354,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         finally:
             conn.close()
         route = vendor["name"] if vendor else "official"
-        log("%s %s model=%s route=%s status=%s bytes=%d"
-            % (self.command, self.path, model, route, resp.status, total))
+        log("%s %s model=%s route=%s status=%s bytes=%d%s"
+            % (self.command, self.path, model, route, resp.status, total,
+               (" err=%s" % err_snippet) if err_snippet else ""))
         self.close_connection = True
 
     do_GET = do_POST = do_DELETE = do_PUT = do_PATCH = _proxy

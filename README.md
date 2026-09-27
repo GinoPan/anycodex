@@ -108,6 +108,12 @@ AnyCodex 自本版本起将 ROUTER 供应商声明为普通 bearer-token 形态�
 
 旧版安装（`requires_openai_auth = true` 的 ROUTER 块）如遇此问题：重跑 `python setup.py`，或手动把该行改为 `experimental_bearer_token = "anycodex-local"` 后重启应用。`codex` CLI 与直连 profile（`glm` / `deepseek`）亦不受影响。
 
+### 已知问题：混选对话切回官方模型时，官方后端严格校验历史条目（2026-09-27 起已由路由自动修复）
+
+同一对话先用 GLM/DeepSeek 跑过几轮、再切回官方模型时，官方后端对回放的历史条目做严格 schema 校验并直接 400（首次触发 2026-09-27：`Invalid 'input[N].content': array too long ... maximum length 0`）。实测官方后端规则：`reasoning` 条目不允许携带原始思维链 `content`（只认 `summary`）；条目 id 有前缀校验（`rs`/`msg` 等），不认识的 id 按"引用已存储条目"处理、`store=false` 下直接 404。而第三方轮次恰好产生这些形状：思维链放在 `content`、id 为各家自造（UUID / `msg_resp_*` / `fc_call_*`）。
+
+路由器现已在**官方路由**上自动归一化输入：vendor 思维链转为 `summary_text` 条目（官方模型可读，保留上下文）、剥离 vendor id 与透传字段、保留 `call_id` 配对；官方自产的 reasoning（Fernet `encrypted_content` 开头 `gAAAA` + `rs` id）原样放行。实测同一混选对话归一化后官方返回 200。第三方路由不受影响（原样透传）。
+
 ## 排障
 
 一切看日志：`~/.codex/router.log`（每个请求的模型、路由、状态码）。
