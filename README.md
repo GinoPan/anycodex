@@ -22,7 +22,7 @@
 
 ## 效果
 
-右下角选择器里，官方模型与第三方模型并列（顶部横幅为官方额度耗尽提示，此时第三方模型照常可用）：
+右下角选择器里，官方模型与第三方模型并列（顶部横幅为官方额度耗尽提示；左下角账户菜单与查看用量等账号功能完整保留）：
 
 ![model picker with mixed models](assets/picker.png)
 
@@ -52,7 +52,7 @@ codex_router.py（127.0.0.1:8231，按请求体里的 model 字段分流）
       └─ 未匹配     → chatgpt.com/backend-api/codex（透传你的 ChatGPT JWT，经系统代理）
 ```
 
-1. **凭证注入（免切换的关键）**：供应商声明为普通 bearer-token 形态（`experimental_bearer_token`），官方请求的 ChatGPT 凭证由路由器从 `~/.codex/auth.json` 读取并注入（`Authorization` + `chatgpt-account-id`，每次请求重读，跟随应用刷新）。官方模型行为与原生一致（实测 429/200 响应与官方直连完全相同）。这一设计同时让新版桌面应用在官方额度耗尽时**不再锁定输入框**（见已知问题）。
+1. **凭证注入（免切换的关键）**：供应商声明为 ChatGPT 登录态（`requires_openai_auth = true`）。官方请求的凭证由引擎自带、路由器从 `~/.codex/auth.json` 兜底注入（`Authorization` + `chatgpt-account-id`，每次请求重读，跟随应用刷新）。实测 429/200 响应与官方直连完全相同。这一形态让桌面应用保留**全部 ChatGPT 账号能力**（左下角账户菜单、查看用量 Usage & billing、账号信息），`/wham/usage` 等账户接口正常工作；官方额度耗尽时应用原生的输入框锁定会回归（见已知问题）。
 2. **按请求分流**：供应商成为模型名的纯函数，从机制上杜绝"界面选 A、请求发给 B"。
 3. **模型目录**（`models.json`）：向引擎声明第三方模型的元数据（上下文窗口、推理档位等），字段经引擎严格校验。
 4. **选择器缓存注入**：桌面端选择器的底表来自服务器下发的账号模型清单（`models_cache.json`），路由器内置监视线程在应用每次刷新该缓存后，自动把自定义模型追加进去——这是第三方模型出现在选择器里的关键。
@@ -94,19 +94,19 @@ AnyCodex 不绑定厂商，GLM / DeepSeek 只是预置模板。加新厂商：�
 一条命令在两种形态间切换（改完**完全重启** ChatGPT 桌面版生效）：
 
 ```bash
-python profile.py mixed      # 默认。官方+第三方混选（本地路由），官方额度可用时的完整体验
-python profile.py glm        # 直连 GLM：官方额度耗尽时也能正常使用（见下方已知问题）
+python profile.py mixed      # 默认。官方+第三方混选（本地路由），保留全部账号功能（查看用量等）
+python profile.py glm        # 直连 GLM：官方额度耗尽、发送被静默拦截时的逃生通道（见下方已知问题）
 python profile.py deepseek   # 直连 DeepSeek：同上
 python profile.py official   # 还原纯官方配置
 ```
 
-### 已知问题：官方额度耗尽 + 登录态供应商时，第三方模型发送被应用静默拦截
+### 已知问题：官方额度耗尽时，混选模式的第三方模型发送会被应用静默拦截
 
-2026-09-24 起的 ChatGPT 桌面版在账号官方额度（周配额）耗尽、且活跃供应商为 ChatGPT 登录态（`requires_openai_auth`）时，会在界面层静默拦截第三方模型的发送：点发送无任何反应、无报错，引擎与网络链路完全正常（请求根本没发出）。**官方模型不受影响**——照常发送并正常提示额度上限；新对话首页的发送按钮在此状态下也可能被禁用（含选官方模型时）。实测确认拦截来自应用界面层（纯官方配置 + 登录态供应商同样中招；`codex` CLI 不受影响）。
+2026-09-24 起的 ChatGPT 桌面版在账号官方额度（周配额）耗尽、且活跃供应商为 ChatGPT 登录态（`requires_openai_auth`）时，会在界面层静默拦截发送：点发送无任何反应、无报错，引擎与网络链路完全正常（请求根本没发出）。官方模型不受影响——照常发送并正常提示额度上限；新对话首页的发送按钮在此状态下也可能被禁用（含选官方模型时）。实测确认拦截来自应用界面层（纯官方配置同样中招；`codex` CLI 不受影响）。
 
-AnyCodex 自本版本起将 ROUTER 供应商声明为普通 bearer-token 形态、凭证改由路由器注入，**混选模式天然不受该拦截影响**：官方额度耗尽时选择器照常混选、点谁走谁（官方模型正常提示额度不足，第三方模型照常工作）。
+混选模式自 2026-09-27 起将 ROUTER 供应商声明为 ChatGPT 登录态，**这是有意取舍**：登录态是桌面应用开放全部账号功能的开关（左下角账户菜单、查看用量、账号信息、配额提示都依赖引擎上报 `authMethod=chatgpt` + workspace 路由；bearer-token 形态下这些全部消失，`/wham/usage` 直接 432）。因此额度耗尽时上述拦截会波及混选模式——届时 `python profile.py glm`（或 `deepseek`）切到直连第三方，配额重置后 `python profile.py mixed` 切回，改完完全重启应用生效。
 
-旧版安装（`requires_openai_auth = true` 的 ROUTER 块）如遇此问题：重跑 `python setup.py`，或手动把该行改为 `experimental_bearer_token = "anycodex-local"` 后重启应用。`codex` CLI 与直连 profile（`glm` / `deepseek`）亦不受影响。
+> 历史注记：09-25 至 09-27 期间曾以 `experimental_bearer_token` 形态运行（配额耗尽时不锁输入框，代价是账号功能全失）。若你更想要"耗尽时第三方照常可用"而无所谓用量入口，把 ROUTER 块中 `requires_openai_auth = true` 手动改回 `experimental_bearer_token = "anycodex-local"` 即可回到那一形态。
 
 ### 已知问题：混选对话切回官方模型时，官方后端严格校验历史条目（2026-09-27 起已由路由自动修复）
 
@@ -125,7 +125,7 @@ AnyCodex 自本版本起将 ROUTER 供应商声明为普通 bearer-token 形态�
 | 第三方模型报 "not supported ... ChatGPT account" | 你在路由配置之前创建的旧对话里用了第三方模型——新开对话或用新开窗口流程 |
 | 所有模型都失败 | 路由没在运行：运行 `python setup.py` 的第 4 步或手动 `pythonw ~/.codex/codex_router.py` |
 | 官方模型 429 | ChatGPT 套餐额度，等重置 |
-| 官方额度耗尽后，选第三方模型点发送无反应、无报错 | 登录态供应商触发了新版应用的静默拦截（见「配置模式与切换」）：重跑 `python setup.py` 升级为凭证注入模式，或临时切 `python profile.py glm` |
+| 官方额度耗尽后，点发送无反应、无报错 | 应用对登录态供应商的额度耗尽静默拦截（见「配置模式与切换」）：`python profile.py glm` 切直连第三方，配额重置后切回 `mixed` |
 | 改了配置不生效 | 引擎不热加载：重启 ChatGPT 桌面版 |
 
 ## 卸载

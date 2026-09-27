@@ -130,7 +130,7 @@ def update_config_toml(vendors):
         "\n[model_providers.ROUTER]\n%s\n"
         'name = "AnyCodex Local Router"\n'
         'base_url = "http://127.0.0.1:%d"\n'
-        'experimental_bearer_token = "anycodex-local"\n'
+        'requires_openai_auth = true\n'
         'wire_api = "responses"\n' % (MARKER, ROUTER_CONFIG["port"])
     )
     for v in vendors:

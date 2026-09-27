@@ -8,8 +8,13 @@ provider changes).
 
 Profiles
   mixed      official + third-party mixed in one picker via the local
-             router (the default AnyCodex experience; requires official
-             quota to be alive - see README known issues)
+             router (the default AnyCodex experience). The ROUTER provider
+             declares requires_openai_auth so the app keeps its full
+             ChatGPT-account features (left-corner menu, usage & billing,
+             account info). When the official weekly quota is exhausted the
+             app's composer lockout returns (all models, silent send
+             blocks) - switch to glm/deepseek until the quota resets, then
+             switch back.
   glm        third-party only: model_provider points directly at the
              GLM vendor block. Bypasses the desktop app's account
              rate-limit composer lockout.
