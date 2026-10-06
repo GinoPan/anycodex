@@ -9,14 +9,14 @@ Listens on 127.0.0.1:<port> and routes Codex Responses-API requests by the
     ChatGPT credentials passed through untouched (the engine sends them because
     the provider is declared with requires_openai_auth = true).
 
-It also keeps the desktop app's model picker populated: the picker's base list
-comes from a server-provided cache file (models_cache.json) that the app
-refreshes on startup. A background thread re-injects the configured custom
-models into that cache every time the app refreshes it.
+It merges custom model metadata into official GET /models responses, so the
+picker always receives the latest official list plus the configured vendors.
+A background thread also upserts those models into models_cache.json for
+offline/cache-only reads. No startup-only model_catalog_json override is used.
 
 Configuration is read from router_config.json located next to this file.
-Keys are read from ~/.codex/config.toml ([model_providers.<section>]
-experimental_bearer_token) with fallback to the environment variable.
+Keys are read from Windows Credential Manager with environment-variable and
+legacy config.toml fallbacks.
 
 Run with pythonw (no console) on Windows. Single instance is guarded by the
 port bind. Log: <CODEX_HOME>/router.log
@@ -31,6 +31,9 @@ import sys
 import threading
 import time
 
+from anycodex_credentials import read_credential
+from anycodex_models import merge_model_catalog
+
 try:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(SCRIPT_DIR, "router_config.json"), encoding="utf-8") as f:
@@ -42,6 +45,8 @@ except (OSError, ValueError) as e:
 PORT = CONFIG.get("port", 8231)
 OFFICIAL = CONFIG["official"]
 VENDORS = CONFIG["vendors"]
+DIAGNOSTICS = CONFIG.get("diagnostics") or {}
+QUOTA_DIAGNOSTICS = DIAGNOSTICS.get("quota", True)
 
 CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(
     os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".codex")
@@ -62,8 +67,66 @@ def log(msg):
         pass
 
 
+_QUOTA_TERMS = ("rate", "limit", "quota", "usage", "credit", "remaining", "reset", "used")
+_SENSITIVE_TERMS = ("token", "authorization", "cookie", "accountid", "email", "userid", "loginid")
+
+
+def quota_response_headers(headers):
+    """Return rate/usage response headers only; never include auth or cookies."""
+    found = []
+    for name, value in headers:
+        lower = name.lower().replace("-", "")
+        if any(term in lower for term in _SENSITIVE_TERMS):
+            continue
+        if any(term in lower for term in _QUOTA_TERMS):
+            found.append("%s=%s" % (name, str(value)[:160]))
+    return found
+
+
+def quota_payload_summary(payload):
+    """Extract quota-shaped scalar fields from JSON without logging user content."""
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except Exception:
+        return []
+    found = []
+
+    def walk(value, path=""):
+        if len(found) >= 40:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                next_path = "%s.%s" % (path, key) if path else str(key)
+                walk(child, next_path)
+        elif isinstance(value, list):
+            for i, child in enumerate(value[:8]):
+                walk(child, "%s[%d]" % (path, i))
+        else:
+            normalized = path.lower().replace("_", "").replace("-", "")
+            if not any(term in normalized for term in _QUOTA_TERMS):
+                return
+            leaf = normalized.rsplit(".", 1)[-1]
+            rendered = "<redacted>" if any(term in leaf for term in _SENSITIVE_TERMS) else repr(value)[:160]
+            found.append("%s=%s" % (path, rendered))
+
+    walk(data)
+    return found
+
+
+def quota_probe_path(path):
+    lower = path.lower()
+    return any(term in lower for term in ("usage", "limit", "quota", "credit", "account"))
+
+
 def load_key(section, env_name):
-    """Vendor key: ~/.codex/config.toml [model_providers.<section>] first, env fallback."""
+    """Vendor key: Credential Manager, environment, then legacy config fallback."""
+    val = read_credential(section)
+    if val:
+        return val
+    val = os.environ.get(env_name)
+    if val:
+        return val
+    # Backward compatibility only. setup.py migrates and removes these values.
     path = os.path.join(CODEX_HOME, "config.toml")
     try:
         import tomllib
@@ -74,10 +137,7 @@ def load_key(section, env_name):
             return token
     except Exception:
         pass
-    val = os.environ.get(env_name)
-    if val:
-        return val
-    raise RuntimeError("no API key found for vendor section %r (env %r)" % (section, env_name))
+    raise RuntimeError("no API key found for credential %r (env %r)" % (section, env_name))
 
 
 KEYS = {}
@@ -191,11 +251,9 @@ def sanitize_official_input(body):
 def chatgpt_auth():
     """(access_token, account_id) from auth.json, re-read per call.
 
-    Used to authenticate official-backend requests when the engine talks to
-    the router without ChatGPT credentials (the provider is declared with a
-    plain bearer token so the desktop app's account rate-limit lockout never
-    engages - see README). The app refreshes auth.json on its own schedule;
-    re-reading per request picks that up automatically.
+    Used only as a fallback when the engine did not send ChatGPT credentials.
+    With requires_openai_auth the engine's headers are preferred, including
+    when credentials live in the OS keychain instead of auth.json.
     """
     try:
         with open(AUTH_PATH, encoding="utf-8") as f:
@@ -205,6 +263,22 @@ def chatgpt_auth():
     except Exception as e:
         log("auth.json read failed: %r" % e)
         return None, None
+
+
+def official_request_headers(request_headers, host):
+    """Build official upstream headers while preserving engine credentials."""
+    headers = {k: v for k, v in request_headers
+               if k.lower() not in ("host", "content-length", "connection",
+                                    "transfer-encoding", "accept-encoding")}
+    headers["Host"] = host
+    headers["Accept-Encoding"] = "identity"
+    if not any(k.lower() == "authorization" for k in headers):
+        tok, acc = chatgpt_auth()
+        if tok:
+            headers["Authorization"] = "Bearer %s" % tok
+            if acc and not any(k.lower() == "chatgpt-account-id" for k in headers):
+                headers["chatgpt-account-id"] = acc
+    return headers
 
 
 def system_http_proxy():
@@ -272,8 +346,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(length) if length else b""
 
+    def _health(self):
+        payload = json.dumps({
+            "ok": True,
+            "service": "anycodex-router",
+            "vendors": [v["name"] for v in ACTIVE_VENDORS],
+        }).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(payload)
+        self.close_connection = True
+
     def _proxy(self):
         body = self._read_body()
+        models_request = (self.command == "GET"
+                          and self.path.split("?", 1)[0] == "/models")
         model = ""
         try:
             model = str(json.loads(body.decode("utf-8")).get("model", ""))
@@ -296,17 +386,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 upstream_path = OFFICIAL["prefix"] + self.path
                 host = OFFICIAL["host"]
                 conn = tls_connection(host, OFFICIAL.get("use_system_proxy", False))
-                headers = {k: v for k, v in self.headers.items()
-                           if k.lower() not in ("host", "content-length", "connection",
-                                                "transfer-encoding", "accept-encoding",
-                                                "authorization", "chatgpt-account-id")}
-                headers["Host"] = host
-                headers["Accept-Encoding"] = "identity"
-                tok, acc = chatgpt_auth()
-                if tok:
-                    headers["Authorization"] = "Bearer %s" % tok
-                    if acc:
-                        headers["chatgpt-account-id"] = acc
+                headers = official_request_headers(self.headers.items(), host)
+                if models_request:
+                    # The official ETag describes the unmodified catalog. Ask
+                    # for the body so vendor edits also take effect on refresh.
+                    headers = {k: v for k, v in headers.items()
+                               if k.lower() not in ("if-none-match", "if-modified-since")}
                 if body:
                     new_body, rewritten = sanitize_official_input(body)
                     if new_body is not None:
@@ -328,8 +413,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.close_connection = True
             return
 
+        if models_request and resp.status == 200:
+            self._models_response(resp, conn)
+            return
+
+        response_headers = resp.getheaders()
+        if QUOTA_DIAGNOSTICS:
+            quota_headers = quota_response_headers(response_headers)
+            if quota_headers:
+                log("quota headers path=%s status=%s %s"
+                    % (self.path, resp.status, " ".join(quota_headers)))
+
         self.send_response(resp.status, resp.reason)
-        for k, v in resp.getheaders():
+        for k, v in response_headers:
             if k.lower() in ("transfer-encoding", "content-length", "connection"):
                 continue
             self.send_header(k, v)
@@ -337,6 +433,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         total = 0
         err_snippet = ""
+        quota_probe = bytearray()
+        inspect_quota = (QUOTA_DIAGNOSTICS and
+                         (resp.status >= 400 or quota_probe_path(self.path)))
         try:
             while True:
                 chunk = resp.read(8192)
@@ -345,6 +444,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 total += len(chunk)
                 if resp.status >= 400 and not err_snippet:
                     err_snippet = chunk[:400].decode("utf-8", "replace").replace("\n", " ")
+                if inspect_quota and len(quota_probe) < 512 * 1024:
+                    quota_probe.extend(chunk[:512 * 1024 - len(quota_probe)])
                 self.wfile.write(chunk)
                 self.wfile.flush()
         except Exception as e:
@@ -353,86 +454,77 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 % (self.command, self.path, model, route, resp.status, total, e))
         finally:
             conn.close()
+        if quota_probe:
+            quota_fields = quota_payload_summary(bytes(quota_probe))
+            if quota_fields:
+                log("quota payload path=%s status=%s %s"
+                    % (self.path, resp.status, " ".join(quota_fields)))
         route = vendor["name"] if vendor else "official"
         log("%s %s model=%s route=%s status=%s bytes=%d%s"
             % (self.command, self.path, model, route, resp.status, total,
                (" err=%s" % err_snippet) if err_snippet else ""))
         self.close_connection = True
 
-    do_GET = do_POST = do_DELETE = do_PUT = do_PATCH = _proxy
+    def _models_response(self, resp, conn):
+        """Merge before the client receives /models; never buffer Responses SSE."""
+        try:
+            payload = resp.read()
+            try:
+                data = json.loads(payload.decode("utf-8"))
+                merged = merge_model_catalog(data, ACTIVE_VENDORS)
+                payload = json.dumps(merged, ensure_ascii=False).encode("utf-8")
+                log("models response merged: official=%d total=%d"
+                    % (len(data["models"]), len(merged["models"])))
+            except (ValueError, KeyError, TypeError) as e:
+                # Unknown server schemas still pass through intact, rather
+                # than breaking official model discovery.
+                log("models response merge skipped: %s" % e)
+            self.send_response(resp.status, resp.reason)
+            for key, value in resp.getheaders():
+                if key.lower() not in ("content-length", "transfer-encoding", "connection",
+                                       "etag", "content-encoding", "content-type"):
+                    self.send_header(key, value)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(payload)
+        finally:
+            conn.close()
+            self.close_connection = True
+
+    def do_GET(self):
+        if self.path.split("?", 1)[0] == "/healthz":
+            self._health()
+        else:
+            self._proxy()
+
+    do_POST = do_DELETE = do_PUT = do_PATCH = _proxy
 
 
 # ---------- models_cache injection (keeps custom models in the desktop picker) ----------
 
 def inject_models_cache():
-    """Upsert configured custom models into the server-provided picker cache.
-
-    Missing entries are appended (cloned from an official entry); existing
-    custom entries whose supported reasoning levels changed in
-    router_config.json are updated in place, so effort-level fixes propagate
-    without waiting for the server to refresh the cache.
-    """
+    """Upsert vendor metadata into the cache, preserving official freshness."""
     try:
         with open(CACHE_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-        models = data.get("models") or []
-        wanted = [m for v in ACTIVE_VENDORS for m in v["models"]]
-        spec_by_slug = {m["slug"]: m for m in wanted}
-        changed = False
-        for i, m in enumerate(models):
-            spec = spec_by_slug.get(m.get("slug"))
-            if spec is None:
-                continue
-            want = [l["effort"] for l in spec["supported_reasoning_levels"]]
-            have = [l.get("effort") for l in m.get("supported_reasoning_levels", [])]
-            if have != want:
-                models[i]["supported_reasoning_levels"] = spec["supported_reasoning_levels"]
-                models[i]["default_reasoning_level"] = spec["default_reasoning_level"]
-                changed = True
-        have = {m.get("slug") for m in models}
-        missing = [s for s in spec_by_slug if s not in have]
-        if not missing and not changed:
+            snapshot = f.read()
+        data = json.loads(snapshot)
+        merged = merge_model_catalog(data, ACTIVE_VENDORS)
+        if merged == data:
             return False
-        tpl = next((m for m in models
-                    if m.get("visibility") == "list" and m.get("slug") not in spec_by_slug), None)
-        if tpl is None:  # no listed official entry to clone from
-            log("models_cache: no template entry found, skip inject")
-            return False
-        base_prio = max((m.get("priority") or 0) for m in models) + 1
-        for i, spec in enumerate(wanted):
-            if spec["slug"] in have:
-                continue
-            entry = json.loads(json.dumps(tpl))  # clone official entry shape
-            entry.update({
-                "slug": spec["slug"],
-                "display_name": spec["display_name"],
-                "description": spec["description"],
-                "priority": base_prio + i,
-                "default_reasoning_level": spec["default_reasoning_level"],
-                "supported_reasoning_levels": spec["supported_reasoning_levels"],
-                "context_window": spec["context_window"],
-                "max_context_window": spec["context_window"],
-                "input_modalities": spec["input_modalities"],
-                "visibility": "list",
-                "is_default": False,
-                "upgrade": None,
-                "availability_nux": None,
-                "additional_speed_tiers": [],
-                "service_tiers": [],
-                "default_service_tier": None,
-                "available_access_programs": None,
-                "multi_agent_version": None,
-                "model_messages": None,
-                "use_responses_lite": False,
-                "supports_search_tool": False,
-            })
-            models.append(entry)
-        data["models"] = models
         tmp = CACHE_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+            json.dump(merged, f, ensure_ascii=False)
+        # Do not replace a newer official refresh that landed while we were
+        # constructing the merged cache. The watcher retries on the next poll.
+        with open(CACHE_PATH, encoding="utf-8") as f:
+            if f.read() != snapshot:
+                os.remove(tmp)
+                return False
         os.replace(tmp, CACHE_PATH)
-        log("models_cache injected/updated: %s%s" % (", ".join(missing), " (+levels updated)" if changed else ""))
+        log("models_cache injected/updated: %s"
+            % ", ".join(m["slug"] for v in ACTIVE_VENDORS for m in v["models"]))
         return True
     except Exception as e:
         log("models_cache inject error: %r" % e)
@@ -448,7 +540,9 @@ def cache_watcher():
                 if last is not None:
                     time.sleep(0.5)  # let the writer finish
                 inject_models_cache()
-                last = os.stat(CACHE_PATH).st_mtime if os.path.exists(CACHE_PATH) else None
+                # Remember the pre-injection version so a concurrent official
+                # refresh isn't swallowed by reading its mtime after merging.
+                last = mt
         except Exception:
             pass
         time.sleep(2)

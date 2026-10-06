@@ -1,10 +1,24 @@
 """Shared helpers for AnyCodex setup/uninstall."""
 import os
+import tomllib
 
 CODEX_HOME = os.environ.get("CODEX_HOME") or os.path.join(
     os.environ.get("USERPROFILE") or os.path.expanduser("~"), ".codex")
 
 MARKER = "# managed by anycodex"
+
+
+def remove_legacy_catalog_override(text, codex_home):
+    """Remove only the static catalog installed by older AnyCodex versions."""
+    cfg = tomllib.loads(text)
+    catalog = cfg.get("model_catalog_json")
+    if cfg.get("model_provider") != "ROUTER" or not catalog:
+        return text
+    path = os.path.normcase(os.path.abspath(os.path.expanduser(catalog)))
+    legacy = os.path.normcase(os.path.abspath(os.path.join(codex_home, "models.json")))
+    if path == legacy:
+        return drop_top_level_keys(text, ("model_catalog_json",))
+    return text
 
 
 def strip_managed_sections(text, section_names=()):

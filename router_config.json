@@ -1,5 +1,9 @@
 {
   "port": 8231,
+  "supervisor_port": 8232,
+  "diagnostics": {
+    "quota": true
+  },
   "official": {
     "host": "chatgpt.com",
     "prefix": "/backend-api/codex",

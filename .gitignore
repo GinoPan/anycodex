@@ -3,3 +3,9 @@ __pycache__/
 .env
 *.log
 .scratch/
+/config.toml
+/auth.json
+*.pem
+*.p12
+*.pfx
+*.key
